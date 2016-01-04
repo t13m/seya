@@ -8,6 +8,8 @@ from keras import initializations
 from keras import activations
 from keras import backend as K
 
+import theano
+
 from seya.utils import apply_layer, apply_model
 
 
@@ -47,7 +49,8 @@ class HalfConvGRU(Recurrent):
         self.b_z = K.zeros((nb_filter,))
 
         # self.conv_h = Convolution2D(nb_filter, nb_rows, nb_cols, border_mode=bm, input_shape=hidden_dim)
-        self.U_h = self.inner_init((np.prod(self.output_dim), np.prod(self.output_dim)))
+        # self.U_h = self.inner_init((np.prod(self.output_dim), np.prod(self.output_dim)))
+        self.U_h = self.inner_init((self.output_dim[0], np.prod(self.output_dim[1:]), np.prod(self.output_dim[1:])))
         self.conv_z = Convolution2D(nb_filter, nb_rows, nb_cols, border_mode=bm, input_shape=hidden_dim)
         self.conv_r = Convolution2D(nb_filter, nb_rows, nb_cols, border_mode=bm, input_shape=hidden_dim)
 
@@ -78,6 +81,15 @@ class HalfConvGRU(Recurrent):
         h = K.zeros((self.batch_size, hidden_dim))
         return [h, ]
 
+    def custom_dot(self, A, B):
+        results, updates = theano.scan(
+            fn=lambda x_mat, y_mat:
+            theano.tensor.batched_dot(x_mat, y_mat),
+            outputs_info=None,
+            sequences=[A],
+            non_sequences=[B])
+        return results
+
     def step(self, x, states):
         input_shape = (self.batch_size, ) + self.reshape_dim
         hidden_dim = (self.batch_size, ) + self.output_dim
@@ -95,7 +107,11 @@ class HalfConvGRU(Recurrent):
 
         z = self.inner_activation(xz_t + apply_layer(self.conv_z, h_tm1))
         r = self.inner_activation(xr_t + apply_layer(self.conv_r, h_tm1))
-        hh_t_part = K.reshape(K.dot(K.flatten(r * h_tm1), self.U_h), hidden_dim)
+
+        # hh_t_part = K.reshape(T.batched_dot(r * h_tm1, self.U_h), hidden_dim)
+        # hh_t_part = K.reshape(K.dot(K.flatten(r * h_tm1), self.U_h), hidden_dim)
+        custom_shape = [hidden_dim[0], hidden_dim[1], hidden_dim[2] * hidden_dim[3]]
+        hh_t_part = K.reshape(self.custom_dot(K.reshape(r * h_tm1, custom_shape), self.U_h), hidden_dim)
         hh_t = self.activation(xh_t + hh_t_part)
         # hh_t = self.activation(xh_t + apply_layer(self.conv_h, r * h_tm1))
         h_t = z * h_tm1 + (1 - z) * hh_t
